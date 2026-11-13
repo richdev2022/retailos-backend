@@ -1,0 +1,113 @@
+# Render deployment config for RetailOS backend.
+# Docs: https://render.com/docs/blueprint-spec
+# How to use:
+#   1. Push this file to your repo's main branch.
+#   2. In Render dashboard: New → Blueprint → select this repo.
+#   3. Render will detect this render.yaml and prompt to create the service.
+#   4. Add the environment variables (see envVars below — those marked "sync: false"
+#      must be set manually; the rest have sensible defaults).
+# After deploy, your API will be live at https://retailos-backend.onrender.com
+# and Swagger UI at https://retailos-backend.onrender.com/docs.
+
+services:
+  - type: web
+    name: retailos-backend
+    runtime: node
+    plan: starter
+    region: ohio  # us-east-2 — closest to Neon's AWS region for low-latency DB access
+    branch: main
+    rootDir: .
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Required (set these in the Render dashboard) ---
+      - key: DATABASE_URL
+        sync: false  # Neon Postgres connection string — must be set manually
+      - key: JWT_ACCESS_SECRET
+        sync: false  # generate with: openssl rand -hex 32
+      - key: JWT_REFRESH_SECRET
+        sync: false  # generate with: openssl rand -hex 32 (different from access)
+      - key: FLW_SECRET_KEY
+        sync: false  # Flutterwave secret key (FLWSECK-...)
+      - key: FLW_PUBLIC_KEY
+        sync: false  # Flutterwave public key (FLWPUBK-...)
+      - key: FLW_ENCRYPTION_KEY
+        sync: false  # Flutterwave encryption key (FLWSECK_TESTxxxxxxxx)
+      - key: FLW_WEBHOOK_HASH
+        sync: false  # Set in Flutterwave dashboard → Webhooks
+      - key: BREVO_API_KEY
+        sync: false  # Brevo API key (xkeysib-...)
+      - key: SMTP_URL
+        sync: false  # If using SMTP directly (smtps://user:pass@host:port)
+      # --- Optional (with sensible defaults) ---
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: APP_NAME
+        value: RetailOS
+      - key: API_PREFIX
+        value: /api/v1
+      - key: LOG_LEVEL
+        value: info
+      - key: COOKIE_SECURE
+        value: "true"  # Set to true in production (HTTPS only)
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: PASSWORD_HASHER
+        value: argon2
+      - key: BCRYPT_ROUNDS
+        value: "12"
+      - key: DEFAULT_CURRENCY
+        value: NGN
+      - key: DEFAULT_COUNTRY
+        value: NG
+      - key: ENABLE_NEGATIVE_STOCK
+        value: "false"
+      - key: DEFAULT_TRIAL_DAYS
+        value: "14"
+      - key: DEFAULT_GRACE_PERIOD_DAYS
+        value: "7"
+      - key: FLW_ENABLED
+        value: "true"
+      - key: FLW_TITLE
+        value: RetailOS Subscription
+      - key: BREVO_ENABLED
+        value: "true"
+      - key: BREVO_SENDER_EMAIL
+        value: noreply@retailos.com  # MUST be a verified sender in Brevo
+      - key: BREVO_SENDER_NAME
+        value: RetailOS
+      - key: BREVO_REPLY_TO
+        value: support@retailos.com
+      - key: BREVO_SMS_SENDER
+        value: RetailOS
+      - key: EMAIL_ENABLED
+        value: "true"
+      - key: EMAIL_FROM
+        value: RetailOS <noreply@retailos.com>
+      - key: EMAIL_FROM_NAME
+        value: RetailOS
+      - key: EMAIL_REPLY_TO
+        value: support@retailos.com
+      - key: CORS_ORIGIN
+        value: https://retailos-web.onrender.com,https://retailos-admin.onrender.com,https://retailos-website.onrender.com,https://app.retailos.com,https://admin.retailos.com,https://www.retailos.com
+      - key: WEBAPP_BASE_URL
+        value: https://retailos-web.onrender.com  # Web app URL (for email links)
+      - key: ADMIN_BASE_URL
+        value: https://retailos-admin.onrender.com  # Admin portal URL
+      - key: WEBSITE_BASE_URL
+        value: https://retailos-website.onrender.com  # Marketing site URL
+      - key: UPLOAD_DIR
+        value: /var/data/uploads  # Persistent disk mount — see disk config below
+      - key: MAX_UPLOAD_MB
+        value: "10"
+
+# Optional persistent disk for uploaded files (product images, receipts, etc.)
+# If you don't need file uploads, you can remove this disk: section.
+# disks:
+#   - name: retailos-uploads
+#     mount_path: /var/data/uploads
+#     size_gb: 1

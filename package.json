@@ -2,11 +2,11 @@
   "name": "retailos-backend",
   "version": "1.0.0",
   "description": "RetailOS - Multi-tenant retail inventory, POS and business management SaaS - Backend API",
-  "main": "dist/server.js",
+  "main": "dist/src/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
     "lint": "eslint . --ext .ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -17,7 +17,7 @@
     "prisma:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
     "cron:recurring-charges": "tsx src/cron/recurring-charges.ts",
-    "start:server": "node dist/src/server.js"
+    "postinstall": "prisma generate || echo 'prisma generate skipped (likely no DATABASE_URL)'"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
