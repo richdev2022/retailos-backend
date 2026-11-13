@@ -47,6 +47,7 @@ model User {
   ticketsAssigned   SupportTicket[]  @relation("TicketAssignee")
   supportMessages   SupportMessage[]
   emailLogs         EmailLog[]
+  otpCodes          OtpCode[]
   paymentsSubmitted PaymentSubmission[]
   paymentsReviewed  PaymentSubmission[] @relation("PaymentSubmissionReviewer")
   salesAsCashier    Sale[]
@@ -1122,6 +1123,66 @@ enum EmailStatus {
   QUEUED
   SENT
   FAILED
+}
+
+// =====================================================
+// OTP / VERIFICATION CODES
+// =====================================================
+
+/// One-time passwords / verification codes for signup, login verification,
+/// password reset, phone verification, and admin MFA.
+/// Codes are 6 digits, expire in 10 minutes, and can be used at most 5 times
+/// (rate-limited per user) before they're locked.
+model OtpCode {
+  id          String   @id @default(uuid())
+  userId      String?
+  /// Channel the OTP was sent through.
+  channel     OtpChannel
+  /// Purpose of the OTP — drives the email template and post-verify side-effects.
+  purpose     OtpPurpose
+  /// Recipient email (for EMAIL channel) or phone (for SMS channel).
+  recipient   String
+  /// 6-digit code, hashed with bcrypt for security.
+  codeHash    String
+  /// Number of failed verification attempts.
+  attempts    Int      @default(0)
+  /// Maximum allowed attempts before lockout.
+  maxAttempts Int      @default(5)
+  /// When the OTP expires (default 10 minutes after creation).
+  expiresAt   DateTime
+  /// When the OTP was used (null if still pending).
+  usedAt      DateTime?
+  /// Whether the OTP was successfully verified.
+  verified    Boolean  @default(false)
+  /// IP address of the requester (for audit).
+  ipAddress   String?
+  /// User agent of the requester (for audit).
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([recipient])
+  @@index([purpose])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+enum OtpChannel {
+  EMAIL
+  SMS
+}
+
+enum OtpPurpose {
+  SIGNUP_EMAIL_VERIFICATION
+  SIGNUP_PHONE_VERIFICATION
+  LOGIN_VERIFICATION
+  PASSWORD_RESET
+  PHONE_CHANGE
+  EMAIL_CHANGE
+  ADMIN_MFA
+  STAFF_INVITATION
 }
 
 // =====================================================
