@@ -77,8 +77,12 @@ export function createApp() {
   // --- health ---
   app.get('/health', (_req, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
-  // --- API docs ---
+  // --- API docs (Swagger UI) ---
+  // Mounted at both /docs and /api-docs for discoverability. Also exposes the
+  // raw OpenAPI JSON at /api-docs.json for tooling.
   app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+  app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
 
   // --- routes (mounted under /api/v1) ---
   const v1 = express.Router();

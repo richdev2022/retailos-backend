@@ -41,7 +41,7 @@ async function bootstrap() {
     // eslint-disable-next-line no-console
     console.log(`[${config.appName}] API listening on http://localhost:${config.port}${config.apiPrefix}`);
     // eslint-disable-next-line no-console
-    console.log(`[docs] http://localhost:${config.port}/docs`);
+    console.log(`[docs] Swagger UI: http://localhost:${config.port}/docs and http://localhost:${config.port}/api-docs`);
   });
 
   const shutdown = async (signal: string) => {
