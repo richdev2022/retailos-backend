@@ -11,6 +11,14 @@ import { Errors, asyncHandler, sendSuccess, sendError } from '../../utils/errors
 import { validateBody } from '../../middleware/validate.js';
 import { seedRbac, BUSINESS_ROLE_TEMPLATES } from '../../utils/rbac.js';
 import { ref } from '../../utils/refs.js';
+import {
+  sendWelcomeEmail,
+  sendPasswordResetEmail,
+  sendPasswordResetSuccessEmail,
+  sendLoginAlertEmail,
+  sendAdminLoginAlertEmail,
+} from '../notifications/templates.js';
+import { createAndSendOtp, verifyOtp } from '../notifications/otp-service.js';
 
 export const authRouter = Router();
 
@@ -82,11 +90,108 @@ authRouter.post(
 
     setRefreshCookie(res, refreshToken);
 
+    // Send welcome email (fire-and-forget — non-blocking)
+    if (user.email) {
+      sendWelcomeEmail({ userId: user.id, email: user.email, fullName: user.fullName }).catch(() => {/* ignore */});
+    }
+
     return sendSuccess(res, {
       user: sanitizeUser(user),
       accessToken,
       expiresIn: 15 * 60,
     }, 'Account created', 201);
+  }),
+);
+
+// =====================================================
+// POST /auth/send-otp
+// Body: { recipient, channel: 'EMAIL'|'SMS', purpose: 'SIGNUP_EMAIL_VERIFICATION'|'LOGIN_VERIFICATION'|'PASSWORD_RESET'|'PHONE_CHANGE'|'EMAIL_CHANGE'|'ADMIN_MFA' }
+// =====================================================
+const SendOtpSchema = z.object({
+  recipient: z.string().min(4),
+  channel: z.enum(['EMAIL', 'SMS']),
+  purpose: z.enum([
+    'SIGNUP_EMAIL_VERIFICATION',
+    'SIGNUP_PHONE_VERIFICATION',
+    'LOGIN_VERIFICATION',
+    'PASSWORD_RESET',
+    'PHONE_CHANGE',
+    'EMAIL_CHANGE',
+    'ADMIN_MFA',
+    'STAFF_INVITATION',
+  ]),
+  userId: z.string().uuid().optional(),
+});
+
+authRouter.post(
+  '/send-otp',
+  validateBody(SendOtpSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { recipient, channel, purpose, userId } = req.body as z.infer<typeof SendOtpSchema>;
+    // Look up user (if exists) for context.fullName in the email
+    let fullName = 'there';
+    let resolvedUserId = userId;
+    if (!resolvedUserId) {
+      const user = await prisma.user.findFirst({ where: { OR: [{ email: recipient }, { phone: recipient }] } });
+      if (user) {
+        resolvedUserId = user.id;
+        fullName = user.fullName;
+      }
+    } else {
+      const user = await prisma.user.findUnique({ where: { id: resolvedUserId } });
+      if (user) fullName = user.fullName;
+    }
+    const result = await createAndSendOtp({
+      userId: resolvedUserId,
+      recipient,
+      channel,
+      purpose,
+      ipAddress: req.ip ?? undefined,
+      userAgent: req.headers['user-agent'] ?? undefined,
+      context: { fullName },
+    });
+    return sendSuccess(res, result, 'OTP sent');
+  }),
+);
+
+// =====================================================
+// POST /auth/verify-otp
+// Body: { recipient, purpose, code }
+// Returns: { verified: boolean, userId?, reason? }
+// =====================================================
+const VerifyOtpSchema = z.object({
+  recipient: z.string().min(4),
+  purpose: z.enum([
+    'SIGNUP_EMAIL_VERIFICATION',
+    'SIGNUP_PHONE_VERIFICATION',
+    'LOGIN_VERIFICATION',
+    'PASSWORD_RESET',
+    'PHONE_CHANGE',
+    'EMAIL_CHANGE',
+    'ADMIN_MFA',
+    'STAFF_INVITATION',
+  ]),
+  code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
+});
+
+authRouter.post(
+  '/verify-otp',
+  validateBody(VerifyOtpSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { recipient, purpose, code } = req.body as z.infer<typeof VerifyOtpSchema>;
+    const result = await verifyOtp({ recipient, purpose, code });
+    if (!result.verified) {
+      return sendError(res, Errors.badRequest(`Verification failed: ${result.reason ?? 'invalid code'}`, 'OTP_INVALID'));
+    }
+    // Mark user's email/phone as verified based on purpose
+    if (result.userId) {
+      if (purpose === 'SIGNUP_EMAIL_VERIFICATION' || purpose === 'EMAIL_CHANGE') {
+        await prisma.user.update({ where: { id: result.userId }, data: { emailVerifiedAt: new Date() } }).catch(() => {});
+      } else if (purpose === 'SIGNUP_PHONE_VERIFICATION' || purpose === 'PHONE_CHANGE') {
+        await prisma.user.update({ where: { id: result.userId }, data: { phoneVerifiedAt: new Date() } }).catch(() => {});
+      }
+    }
+    return sendSuccess(res, result, 'Verified');
   }),
 );
 
@@ -134,6 +239,31 @@ authRouter.post(
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
     setRefreshCookie(res, refreshToken);
+
+    // Send login alert email (fire-and-forget — non-blocking)
+    if (user.email) {
+      const isAdmin = user.email.endsWith('@retailos.local') || user.email.endsWith('@retailos.com');
+      if (isAdmin) {
+        sendAdminLoginAlertEmail({
+          userId: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          device: req.headers['user-agent'] ?? 'Unknown',
+          location: req.ip ?? 'Unknown',
+          timestamp: new Date(),
+        }).catch(() => {/* ignore */});
+      } else {
+        sendLoginAlertEmail({
+          userId: user.id,
+          email: user.email,
+          fullName: user.fullName,
+          device: req.headers['user-agent'] ?? 'Unknown',
+          location: req.ip ?? 'Unknown',
+          timestamp: new Date(),
+        }).catch(() => {/* ignore */});
+      }
+    }
+
     return sendSuccess(res, {
       user: sanitizeUser(user),
       accessToken,
@@ -257,7 +387,7 @@ authRouter.post(
     const { identifier } = req.body as z.infer<typeof ForgotSchema>;
     const user = await prisma.user.findFirst({ where: { OR: [{ email: identifier }, { phone: identifier }] } });
     if (!user) {
-      // do not leak existence
+      // do not leak existence — return the same response either way
       return sendSuccess(res, null, 'If the account exists, a reset link has been sent.');
     }
     const token = generateToken();
@@ -268,9 +398,20 @@ authRouter.post(
         expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1h
       },
     });
-    // No email provider configured; return token in dev (in prod, send via email/SMS)
+    // Send password reset email via Brevo (or queue if Brevo disabled).
+    // Always silent on failure — never leak whether the email was actually sent.
+    if (user.email) {
+      const resetLink = `${config.urls.webapp}/reset-password?token=${token}`;
+      sendPasswordResetEmail({
+        to: user.email,
+        fullName: user.fullName,
+        resetLink,
+        userId: user.id,
+      }).catch(() => {/* never throw from email */});
+    }
+    // In dev mode, also return the token in the response for testing
     if (config.isDev) {
-      return sendSuccess(res, { resetToken: token, message: 'DEV: token returned (would be emailed in prod)' }, 'Reset link generated');
+      return sendSuccess(res, { resetToken: token, message: 'DEV: token returned (also emailed via Brevo if configured)' }, 'Reset link generated');
     }
     return sendSuccess(res, null, 'If the account exists, a reset link has been sent.');
   }),
@@ -294,8 +435,8 @@ authRouter.post(
       return sendError(res, Errors.badRequest('Invalid or expired token', 'INVALID_RESET_TOKEN'));
     }
     const passwordHash = await hashPassword(newPassword);
+    const updatedUser = await prisma.user.update({ where: { id: stored.userId }, data: { passwordHash } });
     await prisma.$transaction([
-      prisma.user.update({ where: { id: stored.userId }, data: { passwordHash } }),
       prisma.passwordReset.update({ where: { id: stored.id }, data: { usedAt: new Date() } }),
       prisma.session.updateMany({
         where: { userId: stored.userId, revokedAt: null },
@@ -306,6 +447,14 @@ authRouter.post(
         data: { revokedAt: new Date() },
       }),
     ]);
+    // Send password-changed success email (fire-and-forget)
+    if (updatedUser.email) {
+      sendPasswordResetSuccessEmail({
+        to: updatedUser.email,
+        fullName: updatedUser.fullName,
+        userId: updatedUser.id,
+      }).catch(() => {/* never throw from email */});
+    }
     return sendSuccess(res, null, 'Password updated. Please log in again.');
   }),
 );
@@ -365,6 +514,14 @@ authRouter.post(
     if (!ok) return sendError(res, Errors.unauthorized('Current password is incorrect', 'INVALID_CURRENT_PASSWORD'));
     const passwordHash = await hashPassword(newPassword);
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
+    // Send password-changed notification email (fire-and-forget)
+    if (user.email) {
+      sendPasswordResetSuccessEmail({
+        to: user.email,
+        fullName: user.fullName,
+        userId: user.id,
+      }).catch(() => {/* never throw from email */});
+    }
     return sendSuccess(res, null, 'Password updated');
   }),
 );

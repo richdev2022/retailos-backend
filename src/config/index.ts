@@ -124,6 +124,25 @@ export const config = {
     enabled: bool('EMAIL_ENABLED', false),
   },
 
+  brevo: {
+    /// Brevo (formerly Sendinblue) API key. Get from https://app.brevo.com/settings/keys/api
+    apiKey: process.env.BREVO_API_KEY || '',
+    /// API base URL.
+    baseUrl: process.env.BREVO_BASE_URL || 'https://api.brevo.com/v3',
+    /// Default sender email (must be a verified sender in your Brevo account).
+    senderEmail: process.env.BREVO_SENDER_EMAIL || 'noreply@retailos.com',
+    /// Default sender name.
+    senderName: process.env.BREVO_SENDER_NAME || 'RetailOS',
+    /// Default reply-to email.
+    replyToEmail: process.env.BREVO_REPLY_TO || 'support@retailos.com',
+    /// Brevo SMS sender name (must be a registered sender — typically your business name).
+    smsSender: process.env.BREVO_SMS_SENDER || 'RetailOS',
+    /// Whether Brevo is enabled. When false, emails are written to email_logs with
+    /// status=QUEUED and a debug log is emitted (no real email is sent).
+    /// When true, all transactional emails + SMS go through Brevo's REST API.
+    enabled: bool('BREVO_ENABLED', false),
+  },
+
   urls: {
     webapp: process.env.WEBAPP_BASE_URL || 'http://localhost:5173',
     admin: process.env.ADMIN_BASE_URL || 'http://localhost:5174',

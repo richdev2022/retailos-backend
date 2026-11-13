@@ -1057,6 +1057,27 @@ adminRouter.post(
       resourceId: session.id,
     });
 
+    // Send admin login alert email (fire-and-forget — non-blocking).
+    // Always sent on admin login for security.
+    if (user.email) {
+      const adminEmail = user.email;
+      const adminFullName = user.fullName;
+      const adminDevice = req.headers['user-agent'] ?? 'Unknown';
+      const adminLocation = req.ip ?? 'Unknown';
+      import('../notifications/templates.js')
+        .then(({ sendAdminLoginAlertEmail }) =>
+          sendAdminLoginAlertEmail({
+            userId: user.id,
+            email: adminEmail,
+            fullName: adminFullName,
+            device: adminDevice,
+            location: adminLocation,
+            timestamp: new Date(),
+          }),
+        )
+        .catch(() => {/* never throw from email */});
+    }
+
     return sendSuccess(
       res,
       {
@@ -2771,3 +2792,64 @@ adminRouter.delete(
     return sendSuccess(res, { key: req.params.key }, 'Config deleted');
   }),
 );
+
+// =====================================================
+// GET /admin/email-logs — paginated list of all outbound emails
+// Query: ?page=1&limit=20&status=QUEUED|SENT|FAILED&template=otp.signup_email_verification&to=user@example.com
+// =====================================================
+adminRouter.get(
+  '/email-logs',
+  asyncHandler(async (req: Request, res: Response) => {
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 20)));
+    const where: Record<string, unknown> = {};
+    if (typeof req.query.status === 'string') where.status = req.query.status;
+    if (typeof req.query.template === 'string') where.template = req.query.template;
+    if (typeof req.query.to === 'string') where.to = { contains: req.query.to, mode: 'insensitive' };
+    if (typeof req.query.userId === 'string') where.userId = req.query.userId;
+
+    const [items, total] = await Promise.all([
+      prisma.emailLog.findMany({
+        where: where as never,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true,
+          to: true,
+          from: true,
+          subject: true,
+          template: true,
+          status: true,
+          error: true,
+          attempts: true,
+          sentAt: true,
+          createdAt: true,
+          userId: true,
+          businessId: true,
+        },
+      }),
+      prisma.emailLog.count({ where: where as never }),
+    ]);
+    return sendSuccess(res, {
+      items,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    }, 'Email logs');
+  }),
+);
+
+// =====================================================
+// GET /admin/email-logs/:id — full email body (HTML)
+// =====================================================
+adminRouter.get(
+  '/email-logs/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const log = await prisma.emailLog.findUnique({ where: { id: req.params.id } });
+    if (!log) return sendError(res, Errors.notFound('Email log not found'));
+    return sendSuccess(res, log, 'OK');
+  }),
+);
+
