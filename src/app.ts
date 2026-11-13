@@ -30,6 +30,8 @@ import { notificationRouter } from './modules/notifications/routes.js';
 import { supportRouter } from './modules/support/routes.js';
 import { adminRouter } from './modules/admin/routes.js';
 import { settingsRouter } from './modules/settings/routes.js';
+import { paymentRouter } from './modules/payments/routes.js';
+import { webhookRouter } from './modules/webhooks/routes.js';
 
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './swagger.js';
@@ -102,6 +104,14 @@ export function createApp() {
   v1.use('/notifications', authMiddleware, notificationRouter);
   v1.use('/support', authMiddleware, supportRouter);
   v1.use('/settings', authMiddleware, settingsRouter);
+
+  // Webhooks (no auth — verified by signature header). Must be mounted BEFORE
+  // the payment router which uses authMiddleware.
+  v1.use('/webhooks', webhookRouter);
+
+  // Payment methods + subscription charges (card management + recurring charges history).
+  // All routes inside require auth + subscription:manage permission.
+  v1.use('/payments', paymentRouter);
 
   // admin portal — separate auth scope (admin auth handled inside router)
   v1.use('/admin', adminRouter);

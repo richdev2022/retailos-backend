@@ -31,6 +31,8 @@ export const Errors = {
     new AppError(403, message, 'ENTITLEMENT_EXCEEDED'),
   rateLimited: (message = 'Too many requests') =>
     new AppError(429, message, 'RATE_LIMITED'),
+  serviceUnavailable: (message: string, code = 'SERVICE_UNAVAILABLE') =>
+    new AppError(503, message, code),
   internal: (message = 'Internal server error') =>
     new AppError(500, message, 'INTERNAL_ERROR'),
 };

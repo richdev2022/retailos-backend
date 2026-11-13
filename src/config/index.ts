@@ -90,6 +90,40 @@ export const config = {
     url: process.env.REDIS_URL || '',
   },
 
+  flutterwave: {
+    /// Secret key (server-to-server). Required for charges + tokenization.
+    secretKey: process.env.FLW_SECRET_KEY || '',
+    /// Public key (client-side tokenization). Sent to the webapp for inline JS SDK.
+    publicKey: process.env.FLW_PUBLIC_KEY || '',
+    /// Encryption key (only needed for card encryption in v2; optional in v3).
+    encryptionKey: process.env.FLW_ENCRYPTION_KEY || '',
+    /// Base URL of the Flutterwave API.
+    baseUrl: process.env.FLW_BASE_URL || 'https://api.flutterwave.com',
+    /// Webhook secret hash header (`verif-hash`) — set this to verify webhook signatures.
+    webhookHash: process.env.FLW_WEBHOOK_HASH || '',
+    /// Title shown on the Flutterwave payment modal.
+    title: process.env.FLW_TITLE || 'RetailOS Subscription',
+    /// Logo URL shown on the Flutterwave payment modal.
+    logoUrl: process.env.FLW_LOGO_URL || '',
+    /// Whether Flutterwave is enabled. When false, charge endpoints return 503.
+    enabled: bool('FLW_ENABLED', false),
+  },
+
+  email: {
+    /// SMTP connection URL (e.g. smtps://user:pass@smtp.host.com:465).
+    /// When empty, emails are logged but not actually sent.
+    smtpUrl: process.env.SMTP_URL || '',
+    /// From address.
+    fromAddress: process.env.EMAIL_FROM || 'RetailOS <noreply@retailos.com>',
+    /// From name.
+    fromName: process.env.EMAIL_FROM_NAME || 'RetailOS',
+    /// Reply-To address.
+    replyTo: process.env.EMAIL_REPLY_TO || 'support@retailos.com',
+    /// Whether SMTP is enabled. When false, emails are written to EmailLog with status=QUEUED
+    /// and a debug log is emitted; otherwise they are sent via nodemailer.
+    enabled: bool('EMAIL_ENABLED', false),
+  },
+
   urls: {
     webapp: process.env.WEBAPP_BASE_URL || 'http://localhost:5173',
     admin: process.env.ADMIN_BASE_URL || 'http://localhost:5174',

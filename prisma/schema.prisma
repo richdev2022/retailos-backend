@@ -46,6 +46,7 @@ model User {
   ticketsCreated    SupportTicket[]  @relation("TicketCreator")
   ticketsAssigned   SupportTicket[]  @relation("TicketAssignee")
   supportMessages   SupportMessage[]
+  emailLogs         EmailLog[]
   paymentsSubmitted PaymentSubmission[]
   paymentsReviewed  PaymentSubmission[] @relation("PaymentSubmissionReviewer")
   salesAsCashier    Sale[]
@@ -151,6 +152,10 @@ model Business {
   syncEvents        SyncEvent[]
   supportTickets    SupportTicket[]
   unitsOfMeasure    UnitOfMeasure[]
+  savedCards        SavedCard[]
+  subscriptionCharges SubscriptionCharge[]
+  subscriptionEvents SubscriptionEvent[]
+  emailLogs         EmailLog[]
 
   @@index([ownerId])
   @@map("businesses")
@@ -865,6 +870,8 @@ model SubscriptionPlan {
 
   subscriptions   Subscription[]
   paymentSubmissions PaymentSubmission[]
+  charges         SubscriptionCharge[]
+  subscriptionEvents SubscriptionEvent[]
 
   @@map("subscription_plans")
 }
@@ -884,6 +891,7 @@ model Subscription {
 
   business        Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   plan            SubscriptionPlan @relation(fields: [planId], references: [id])
+  charges         SubscriptionCharge[]
 
   @@index([businessId])
   @@map("subscriptions")
@@ -929,6 +937,191 @@ enum PaymentSubmissionStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+// =====================================================
+// FLUTTERWAVE CARD PAYMENTS (recurring subscription billing)
+// =====================================================
+
+/// A tokenized card saved against a business (for recurring subscription charges).
+/// The Flutterwave token is returned after the first successful charge and is tied
+/// to the email address used in the initial charge (Flutterwave requirement).
+model SavedCard {
+  id              String   @id @default(uuid())
+  businessId      String
+  /// Flutterwave card token (e.g. "flw-t1nf-...-m03k"). Tied to the email below.
+  token           String
+  /// Email used to tokenize this card. Flutterwave requires the same email on every charge.
+  emailUsed       String
+  /// First 6 digits (BIN) of the card.
+  first6          String
+  /// Last 4 digits (card display hint).
+  last4           String
+  /// Card brand ("VISA", "MASTERCARD", "VERVE", ...).
+  brand           String
+  /// Card issuer (bank name).
+  issuer          String?
+  /// Card country ("NG", "GH", ...).
+  country         String?
+  /// Card type ("VISA", "MASTERCARD", ...).
+  cardType        String?
+  /// Card expiry MM/YY (display hint; Flutterwave token has its own expiry).
+  expiry          String?
+  /// Whether this card is the default for charging the subscription.
+  isDefault       Boolean  @default(false)
+  /// Set when the card was last used.
+  lastUsedAt      DateTime?
+  /// Whether the token is still usable (set false if Flutterwave returns auth error).
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business        Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  charges         SubscriptionCharge[]
+
+  @@unique([businessId, token], map: "saved_cards_business_token_unique")
+  @@index([businessId])
+  @@index([isDefault])
+  @@map("saved_cards")
+}
+
+/// Result of a Flutterwave charge attempt (either on-demand or scheduled recurring charge).
+model SubscriptionCharge {
+  id              String   @id @default(uuid())
+  businessId      String
+  subscriptionId  String?
+  planId          String?
+  savedCardId     String?
+  /// Flutterwave transaction id (after charge succeeds).
+  flwTransactionId BigInt?
+  /// Our transaction reference (FLW-...-retailos-...).
+  txRef           String   @unique(map: "subscription_charges_txref_unique")
+  /// Amount charged in minor units (kobo for NGN).
+  amountMinor     BigInt
+  currency        String   @default("NGN")
+  /// The status of the charge from our side.
+  status          SubscriptionChargeStatus @default(PENDING)
+  /// Reason for the charge (e.g. "Monthly subscription renewal — Pro plan").
+  narration       String?
+  /// Flutterwave charge response code ("00" = success).
+  chargeResponseCode String?
+  /// Flutterwave charge response message ("Approved" / "Pending OTP validation" / "Declined").
+  chargeResponseMessage String?
+  /// If the charge required 3DS/OTP, the auth URL Flutterwave returned.
+  authUrl         String?
+  /// Error/failure details if the charge failed.
+  failureReason   String?
+  /// When we attempted the charge.
+  attemptedAt     DateTime @default(now())
+  /// When the charge was finalized (success/failure confirmed).
+  finalizedAt     DateTime?
+  /// Number of retry attempts made for failed charges.
+  retryCount      Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  business        Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  subscription    Subscription? @relation(fields: [subscriptionId], references: [id])
+  plan            SubscriptionPlan? @relation(fields: [planId], references: [id])
+  savedCard       SavedCard?    @relation(fields: [savedCardId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([subscriptionId])
+  @@index([status])
+  @@index([attemptedAt])
+  @@map("subscription_charges")
+}
+
+enum SubscriptionChargeStatus {
+  PENDING
+  REQUIRES_OTP
+  SUCCESSFUL
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+/// Audit-trail of every payment / subscription event for a business (renewals,
+/// failures, retries, refunds, card additions, card removals, plan changes).
+/// Displayed to the business owner as "subscription history".
+model SubscriptionEvent {
+  id              String   @id @default(uuid())
+  businessId      String
+  type            SubscriptionEventType
+  /// Human-readable summary (e.g. "Renewed Pro plan for 30 days").
+  description     String
+  /// Money amount involved, if any (in minor units).
+  amountMinor     BigInt?
+  currency        String?
+  /// Related SubscriptionCharge id (if applicable).
+  chargeId        String?
+  /// Related SubscriptionPlan id (if applicable).
+  planId          String?
+  /// Related SavedCard id (if applicable).
+  cardId          String?
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  business        Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  plan            SubscriptionPlan? @relation(fields: [planId], references: [id])
+
+  @@index([businessId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("subscription_events")
+}
+
+enum SubscriptionEventType {
+  TRIAL_STARTED
+  TRIAL_ENDED
+  PLAN_CHANGED
+  SUBSCRIPTION_RENEWED
+  CHARGE_SUCCESSFUL
+  CHARGE_FAILED
+  CHARGE_REFUNDED
+  CARD_ADDED
+  CARD_REMOVED
+  CARD_SET_DEFAULT
+  SUBSCRIPTION_CANCELLED
+  SUBSCRIPTION_REACTIVATED
+}
+
+/// Outbound email log — every email sent by the platform (subscription receipts,
+/// failure notifications, etc.) is recorded here for audit and debugging.
+/// In production, the SMTP sender is configured via SMTP_URL.
+model EmailLog {
+  id              String   @id @default(uuid())
+  /// Recipient email address.
+  to              String
+  /// Recipient user id (if known).
+  userId          String?
+  businessId      String?
+  from            String
+  subject         String
+  body            String
+  /// Template slug (e.g. "subscription.charge.success").
+  template        String?
+  status          EmailStatus @default(QUEUED)
+  /// Error message if send failed.
+  error           String?
+  /// Number of attempts made.
+  attempts        Int      @default(0)
+  sentAt          DateTime?
+  createdAt       DateTime @default(now())
+
+  user            User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  business        Business? @relation(fields: [businessId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([businessId])
+  @@index([status])
+  @@map("email_logs")
+}
+
+enum EmailStatus {
+  QUEUED
+  SENT
+  FAILED
 }
 
 // =====================================================
