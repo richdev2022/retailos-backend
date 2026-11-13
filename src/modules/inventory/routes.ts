@@ -161,7 +161,7 @@
  *   get:
  *     tags: [Inventory]
  *     summary: List inventory balances
- *     description: Paginated list of current balances with product details (name, sku, barcode). Computed stock status: in_stock / low_stock / out_of_stock based on product.minStock.
+ *     description: "Paginated list of current balances with product details (name, sku, barcode). Computed stock status: in_stock / low_stock / out_of_stock based on product.minStock."
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }

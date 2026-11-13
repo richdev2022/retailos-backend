@@ -9,9 +9,7 @@ declare global {
 export const prisma =
   global.__prisma ??
   new PrismaClient({
-    log: config.isDev
-      ? ['query', 'warn', 'error']
-      : ['warn', 'error'],
+    log: ['warn', 'error'],
   });
 
 if (config.isDev) {
