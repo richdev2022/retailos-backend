@@ -1,23 +1,112 @@
 /**
- * Flutterwave webhook handler.
+ * @openapi
+ * /webhooks/flutterwave:
+ *   post:
+ *     tags: [Webhooks]
+ *     summary: Flutterwave webhook receiver
+ *     description: |
+ *       Receives webhook events from Flutterwave for transaction status changes.
+ *       **No authentication required** — the request is authenticated via the
+ *       `verif-hash` header which must match the `FLW_WEBHOOK_HASH` env var
+ *       configured in your Flutterwave dashboard (Settings → Webhooks).
  *
- * Endpoint: POST /api/v1/webhooks/flutterwave
+ *       On `charge.completed` events, this endpoint:
+ *       1. Verifies the `verif-hash` header matches `FLW_WEBHOOK_HASH`.
+ *       2. Calls Flutterwave's `/v3/transactions/:id/verify` to confirm the
+ *          transaction status (idempotent and authoritative).
+ *       3. Finds the matching `SubscriptionCharge` by `tx_ref`.
+ *       4. Updates the charge status. On success: extends the subscription by
+ *          30 days and sends the customer a "Payment successful" email.
+ *          On failure: marks the charge as failed and sends a "Payment failed"
+ *          email asking the customer to update their card.
  *
- * Flutterwave sends webhook events for transaction status changes:
- *   - charge.completed    (card charge finalized — verify and update our record)
- *   - transfer.completed  (outbound transfer — not used here)
+ *       **Always returns 200** — Flutterwave retries the webhook if it receives
+ *       any non-2xx status code. We return 200 even on invalid signature (with
+ *       `{status: "ignored"}`) to stop retries for unauthenticated requests.
  *
- * The webhook includes a `verif-hash` header that we compare against
- * FLW_WEBHOOK_HASH to authenticate the request.
- *
- * On `charge.completed` we:
- *   1. Verify the signature.
- *   2. Read the `data.id` (Flutterwave transaction id) and call verifyTransaction().
- *   3. Find the matching SubscriptionCharge by `tx_ref` (which we generated).
- *   4. Update the charge status. If success, extend the subscription + send email.
- *      If failure, mark as failed and send the failure email.
- *
- * Returns 200 immediately (Flutterwave retries if not 200).
+ *       **Configure in Flutterwave dashboard**:
+ *       1. Go to https://dashboard.flutterwave.com/dashboard/settings/webhooks
+ *       2. Set the webhook URL to `https://YOUR_BACKEND_DOMAIN/api/v1/webhooks/flutterwave`
+ *       3. Copy the "Secret hash" shown and set it as the `FLW_WEBHOOK_HASH`
+ *          environment variable on your backend.
+ *     security: []  # No auth — verified via verif-hash header
+ *     parameters:
+ *       - in: header
+ *         name: verif-hash
+ *         required: true
+ *         schema: { type: string }
+ *         description: The webhook secret hash from your Flutterwave dashboard.
+ *       - in: header
+ *         name: Content-Type
+ *         required: true
+ *         schema: { type: string, default: "application/json" }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               event:
+ *                 type: string
+ *                 enum: [charge.completed, transfer.completed]
+ *                 description: The Flutterwave event type.
+ *               data:
+ *                 type: object
+ *                 properties:
+ *                   id: { type: integer, description: Flutterwave transaction id }
+ *                   tx_ref: { type: string, description: Our transaction reference }
+ *                   status: { type: string, enum: [successful, failed, pending] }
+ *                   amount: { type: number }
+ *                   currency: { type: string }
+ *                   customer:
+ *                     type: object
+ *                     properties:
+ *                       email: { type: string }
+ *                       name: { type: string }
+ *           example:
+ *             event: charge.completed
+ *             data:
+ *               id: 1234567
+ *               tx_ref: "FLW-retailos-lxyz1234-abc"
+ *               status: successful
+ *               amount: 15000
+ *               currency: NGN
+ *               customer:
+ *                 email: "user@example.com"
+ *                 name: "John Doe"
+ *     responses:
+ *       200:
+ *         description: Webhook received and processed (or ignored if signature invalid)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string, enum: [ok, ignored, error] }
+ *                 reason: { type: string, required: false }
+ *             examples:
+ *               valid:
+ *                 value: { status: "ok" }
+ *                 summary: Webhook verified and processed
+ *               invalidSignature:
+ *                 value: { status: "ignored", reason: "invalid_signature" }
+ *                 summary: Signature mismatch — webhook ignored
+ *               noTxRef:
+ *                 value: { status: "ok", reason: "no_tx_ref" }
+ *                 summary: No matching charge found (ignored)
+ *               alreadyFinalized:
+ *                 value: { status: "ok", reason: "already_finalized" }
+ *                 summary: Charge was already processed (idempotent)
+ *       500:
+ *         description: Processing error — Flutterwave will retry
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string, example: "error" }
+ *                 message: { type: string }
  */
 import { Router, type Request, type Response } from 'express';
 import { prisma } from '../../db/index.js';
@@ -32,6 +121,10 @@ import {
 
 export const webhookRouter = Router();
 
+/**
+ * POST /webhooks/flutterwave
+ * Receives webhook events from Flutterwave. No auth — verified via verif-hash header.
+ */
 webhookRouter.post('/flutterwave', asyncHandler(async (req: Request, res: Response) => {
   // Verify the verif-hash header
   const verifHash = req.headers['verif-hash'] as string | undefined;

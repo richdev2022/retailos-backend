@@ -20,6 +20,222 @@
  * All endpoints require authentication + business scope. The business owner or
  * a user with `subscription:manage` permission may call these.
  */
+
+/**
+ * @openapi
+ * /payments/public-key:
+ *   get:
+ *     tags: [Payments]
+ *     summary: Get Flutterwave public key
+ *     description: Returns the Flutterwave public key + branding config for the webapp's inline payment SDK.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Public key + branding, content: { application/json: { schema: { type: object, properties: { publicKey: { type: string }, title: { type: string }, logoUrl: { type: string } } } } } }
+ *       503: { description: Flutterwave not enabled }
+ */
+/**
+ * @openapi
+ * /payments/cards:
+ *   get:
+ *     tags: [Payments]
+ *     summary: List saved cards
+ *     description: Returns all tokenized cards saved against the active business (mask-sensitive data — no token exposed).
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: List of saved cards, content: { application/json: { schema: { type: array, items: { type: object, properties: { id: { type: string }, brand: { type: string }, last4: { type: string }, first6: { type: string }, issuer: { type: string }, expiry: { type: string }, isDefault: { type: boolean }, isActive: { type: boolean }, lastUsedAt: { type: string, format: date-time }, createdAt: { type: string, format: date-time } } } } } } }
+ */
+/**
+ * @openapi
+ * /payments/cards:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Add a new card
+ *     description: |
+ *       Tokenizes a new card via Flutterwave's direct charge endpoint.
+ *       Charges NGN 100 to verify the card, then immediately refunds it.
+ *       The resulting Flutterwave card token is stored against the business
+ *       for future recurring subscription charges.
+ *
+ *       If the card requires OTP or 3DS verification, returns 202 with
+ *       `flwRef` and `authUrl` for the client to complete.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [cardNumber, cvv, expiryMonth, expiryYear]
+ *             properties:
+ *               cardNumber: { type: string, description: "12-19 digit card number (spaces allowed)" }
+ *               cvv: { type: string, description: "3-4 digit CVV" }
+ *               expiryMonth: { type: string, description: "MM (2-digit expiry month)" }
+ *               expiryYear: { type: string, description: "YY (2-digit expiry year)" }
+ *               pin: { type: string, description: "4-digit PIN (required for Nigerian cards)" }
+ *               billingAddress: { type: object, description: "Optional AVS billing address" }
+ *     responses:
+ *       201: { description: Card tokenized and saved, content: { application/json: { schema: { type: object, properties: { id: { type: string }, brand: { type: string }, last4: { type: string }, isDefault: { type: boolean } } } } } }
+ *       202: { description: OTP/3DS verification required, content: { application/json: { schema: { type: object, properties: { status: { type: string, enum: [pending_otp, pending_3ds] }, flwRef: { type: string }, authUrl: { type: string }, flwTransactionId: { type: integer } } } } } }
+ *       400: { description: Card verification failed }
+ *       503: { description: Flutterwave not enabled }
+ */
+/**
+ * @openapi
+ * /payments/cards/{id}:
+ *   delete:
+ *     tags: [Payments]
+ *     summary: Remove a saved card
+ *     description: |
+ *       Soft-deletes a saved card (sets isActive=false).
+ *
+ *       If this is the only active card AND there's an active subscription,
+ *       returns 409 with `ONLY_CARD_WITH_SUBSCRIPTION` — pass `?force=true`
+ *       to override (the subscription will fail to renew until a new card is added).
+ *
+ *       If the removed card was the default, the next-oldest active card
+ *       is promoted to default automatically.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *       - { in: query, name: force, schema: { type: boolean, default: false }, description: "Override the only-card-with-subscription block" }
+ *     responses:
+ *       200: { description: Card removed }
+ *       404: { description: Card not found }
+ *       409: { description: Only card with active subscription (pass ?force=true) }
+ */
+/**
+ * @openapi
+ * /payments/cards/{id}/default:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Set a card as default
+ *     description: |
+ *       Marks the specified card as the default for recurring subscription
+ *       charges (used by the cron runner). Any previously-default card is
+ *       un-set automatically (atomic — only one default per business).
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: Default card updated }
+ *       404: { description: Card not found }
+ */
+/**
+ * @openapi
+ * /payments/charge:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Charge the default card for a subscription renewal
+ *     description: |
+ *       Charges the default saved card (or the one specified by `cardId`)
+ *       for a subscription renewal. On success:
+ *         1. Records the SubscriptionCharge (status=SUCCESSFUL).
+ *         2. Extends the subscription by 30 days (monthly) or 365 days (annual).
+ *         3. Records a `CHARGE_SUCCESSFUL` + `SUBSCRIPTION_RENEWED` event.
+ *         4. Sends a "Payment successful" email to the business owner.
+ *
+ *       On failure: marks the charge as FAILED, records a `CHARGE_FAILED`
+ *       event, and sends a "Payment failed — update your card" email.
+ *
+ *       If the charge requires OTP/3DS, returns 202 with the authUrl.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               planId: { type: string, format: uuid, description: "Plan to charge for. If omitted, uses the active subscription's plan." }
+ *               cardId: { type: string, format: uuid, description: "Specific card to charge. If omitted, uses the default card." }
+ *               interval: { type: string, enum: [monthly, annual], default: monthly }
+ *     responses:
+ *       200: { description: Charge successful, content: { application/json: { schema: { type: object, properties: { chargeId: { type: string }, txRef: { type: string }, status: { type: string }, newEndDate: { type: string, format: date-time } } } } } }
+ *       202: { description: OTP/3DS verification required }
+ *       400: { description: Charge failed }
+ *       503: { description: Flutterwave not enabled }
+ */
+/**
+ * @openapi
+ * /payments/charges:
+ *   get:
+ *     tags: [Payments]
+ *     summary: List all subscription charges (billing history)
+ *     description: Returns a paginated list of all subscription charges for the active business.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 50 } }
+ *     responses:
+ *       200: { description: Paginated charges, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { type: object } }, total: { type: integer }, page: { type: integer }, totalPages: { type: integer } } } } } }
+ */
+/**
+ * @openapi
+ * /payments/charges/{id}:
+ *   get:
+ *     tags: [Payments]
+ *     summary: Get a single charge detail
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: Charge detail }
+ *       404: { description: Charge not found }
+ */
+/**
+ * @openapi
+ * /payments/charges/{id}/retry:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Retry a failed charge
+ *     description: |
+ *       Creates a new SubscriptionCharge with a fresh tx_ref (the old one
+ *       is marked CANCELLED) and re-attempts the Flutterwave charge using
+ *       the same card + amount. Records a `CHARGE_SUCCESSFUL` or
+ *       `CHARGE_FAILED` event based on the outcome.
+ *
+ *       Only charges with status=FAILED can be retried.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+ *     responses:
+ *       200: { description: Retry successful }
+ *       400: { description: Retry failed (or charge is not in FAILED status) }
+ */
+/**
+ * @openapi
+ * /payments/events:
+ *   get:
+ *     tags: [Payments]
+ *     summary: List subscription events (audit history)
+ *     description: |
+ *       Returns a paginated list of all subscription-related events for the
+ *       active business — renewals, failures, retries, refunds, card additions,
+ *       card removals, plan changes, trial starts/ends.
+ *
+ *       Each event includes: type, description, amount (if applicable),
+ *       related charge/card/plan ids, and timestamp.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }
+ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
+ *       - { in: query, name: limit, schema: { type: integer, default: 20, maximum: 50 } }
+ *     responses:
+ *       200: { description: Paginated subscription events, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { type: object, properties: { id: { type: string }, type: { type: string }, description: { type: string }, amountMinor: { type: string }, currency: { type: string }, chargeId: { type: string }, cardId: { type: string }, plan: { type: object }, createdAt: { type: string, format: date-time } } } }, total: { type: integer }, page: { type: integer }, totalPages: { type: integer } } } } } }
+ */
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../../db/index.js';
