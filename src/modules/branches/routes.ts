@@ -62,7 +62,7 @@
  *   get:
  *     tags: [Branches]
  *     summary: List branches with performance summary
- *     description: Returns each branch with sales count + total revenue for the current period (default: month-to-date).
+ *     description: "Returns each branch with sales count + total revenue for the current period (default: month-to-date)."
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: header, name: X-Business-Id, required: true, schema: { type: string } }

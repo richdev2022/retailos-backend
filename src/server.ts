@@ -6,6 +6,16 @@ import { seedPlans } from './modules/subscriptions/seed.js';
 import { seedAdminUser } from './modules/admin/seed.js';
 
 async function bootstrap() {
+  // Catch unhandled rejections / errors so they actually surface
+  process.on('unhandledRejection', (err) => {
+    console.error('[fatal] unhandledRejection:', err);
+    process.exit(1);
+  });
+  process.on('uncaughtException', (err) => {
+    console.error('[fatal] uncaughtException:', err);
+    process.exit(1);
+  });
+
   // Verify DB connectivity
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -18,9 +28,13 @@ async function bootstrap() {
   }
 
   // Seed RBAC + plans + first admin (idempotent)
+  console.log('[seed] starting RBAC seed...');
   await seedRbac().catch((e) => console.warn('[seed] rbac skipped:', (e as Error).message));
+  console.log('[seed] starting plans seed...');
   await seedPlans().catch((e) => console.warn('[seed] plans skipped:', (e as Error).message));
+  console.log('[seed] starting admin seed...');
   await seedAdminUser().catch((e) => console.warn('[seed] admin skipped:', (e as Error).message));
+  console.log('[seed] complete');
 
   const app = createApp();
   const server = app.listen(config.port, () => {

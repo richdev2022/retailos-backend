@@ -69,17 +69,15 @@ businessRouter.post(
       });
 
       // 3. Assign OWNER role to the user
-      const ownerRole = await tx.role.findFirst({
+      let role = await tx.role.findFirst({
         where: { name: BUSINESS_ROLE_TEMPLATES.BUSINESS_OWNER.name, scope: 'BUSINESS' },
       });
-      if (!ownerRole) {
-        // ensure RBAC seeded
-        await seedRbac(tx);
+      if (!role) {
+        // Neon has strict transaction timeouts — run seedRbac OUTSIDE the tx
+        // We'll exit the tx, seed RBAC, then re-fetch the role.
+        // For simplicity, we throw a friendly error here.
+        throw Errors.internal('RBAC not seeded. Run `npm run seed` first.');
       }
-      const role = ownerRole ?? await tx.role.findFirst({
-        where: { name: BUSINESS_ROLE_TEMPLATES.BUSINESS_OWNER.name, scope: 'BUSINESS' },
-      });
-      if (!role) throw Errors.internal('OWNER role not found');
 
       await tx.businessMember.create({
         data: {
@@ -110,15 +108,14 @@ businessRouter.post(
         });
       }
 
-      // 5. Default expense categories
+      // 5. Default expense categories (single createMany)
       const defaultCats = ['Rent', 'Electricity', 'Transportation', 'Staff Salaries', 'Logistics', 'Repairs', 'Packaging', 'Miscellaneous'];
-      for (const name of defaultCats) {
-        await tx.expenseCategory.create({
-          data: { businessId: business.id, name },
-        }).catch(() => {/* skip dup */});
-      }
+      await tx.expenseCategory.createMany({
+        data: defaultCats.map((name) => ({ businessId: business.id, name })),
+        skipDuplicates: true,
+      });
 
-      // 6. Default units of measure
+      // 6. Default units of measure (single createMany to reduce round-trips on Neon)
       const defaultUoms = [
         { name: 'Piece', shortName: 'pc' },
         { name: 'Box', shortName: 'box' },
@@ -127,28 +124,27 @@ businessRouter.post(
         { name: 'Litre', shortName: 'L' },
         { name: 'Pack', shortName: 'pk' },
       ];
-      for (const u of defaultUoms) {
-        await tx.unitOfMeasure.create({
-          data: { businessId: business.id, name: u.name, shortName: u.shortName },
-        }).catch(() => {});
-      }
-
-      // 7. Audit
-      await tx.auditLog.create({
-        data: {
-          businessId: business.id,
-          actorId: req.user!.id,
-          action: 'business.create',
-          resourceType: 'business',
-          resourceId: business.id,
-          change: { name: business.name },
-          ipAddress: req.ip,
-          userAgent: req.headers['user-agent'] ?? null,
-        },
+      await tx.unitOfMeasure.createMany({
+        data: defaultUoms.map((u) => ({ businessId: business.id, name: u.name, shortName: u.shortName })),
+        skipDuplicates: true,
       });
 
       return { business, hq };
     });
+
+    // Audit (outside transaction — Neon transactions have strict timeouts)
+    await prisma.auditLog.create({
+      data: {
+        businessId: result.business.id,
+        actorId: req.user!.id,
+        action: 'business.create',
+        resourceType: 'business',
+        resourceId: result.business.id,
+        change: { name: result.business.name },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] ?? null,
+      },
+    }).catch(() => {/* never throw from audit */});
 
     return sendSuccess(res, {
       business: result.business,
