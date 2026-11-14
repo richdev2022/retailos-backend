@@ -162,21 +162,29 @@ businessRouter.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     if (!req.user) return sendError(res, Errors.unauthorized());
+    // Simplified query — avoid deep nested includes that cause 500s on Neon.
+    // The mobile/web client only needs business name, id, currency, and role.
     const memberships = await prisma.businessMember.findMany({
       where: { userId: req.user.id, status: 'ACTIVE' },
       include: {
-        business: {
-          include: {
-            branches: { where: { status: 'ACTIVE' } },
-            subscriptions: { orderBy: { createdAt: 'desc' }, take: 1, include: { plan: true } },
-            _count: { select: { products: true, members: true } },
-          },
-        },
-        role: true,
-        branch: true,
+        business: { select: { id: true, name: true, category: true, phone: true, email: true, country: true, currency: true, address: true, logoUrl: true, taxIdentifier: true, taxRateBps: true, status: true, createdAt: true, updatedAt: true } },
+        role: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true, isHQ: true } },
       },
     });
-    return sendSuccess(res, memberships, 'OK');
+    // Return a simplified format that the mobile/web client expects
+    const result = memberships.map((m) => ({
+      id: m.id,
+      businessId: m.business.id,
+      businessName: m.business.name,
+      business: m.business,
+      roleId: m.role.id,
+      roleName: m.role.name,
+      branchId: m.branch?.id ?? null,
+      branchName: m.branch?.name ?? null,
+      status: m.status,
+    }));
+    return sendSuccess(res, result, 'OK');
   }),
 );
 
