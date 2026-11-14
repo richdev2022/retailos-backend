@@ -54,8 +54,10 @@ export const config = {
 
   cookies: {
     refreshTokenName: process.env.REFRESH_TOKEN_COOKIE_NAME || 'retailos_rt',
-    secure: bool('COOKIE_SECURE', false),
-    sameSite: (process.env.COOKIE_SAMESITE as 'lax' | 'strict' | 'none') || 'lax',
+    // In production (NODE_ENV=production), default to Secure=true + SameSite=None
+    // (required for cross-origin cookie sharing between Render subdomains).
+    secure: bool('COOKIE_SECURE', process.env.NODE_ENV === 'production'),
+    sameSite: (process.env.COOKIE_SAMESITE as 'lax' | 'strict' | 'none') || (process.env.NODE_ENV === 'production' ? 'none' : 'lax'),
   },
 
   password: {
