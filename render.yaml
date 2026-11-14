@@ -55,7 +55,7 @@ services:
       - key: COOKIE_SECURE
         value: "true"  # Set to true in production (HTTPS only)
       - key: COOKIE_SAMESITE
-        value: lax
+        value: none
       - key: PASSWORD_HASHER
         value: argon2
       - key: BCRYPT_ROUNDS
@@ -93,7 +93,7 @@ services:
       - key: EMAIL_REPLY_TO
         value: support@retailos.com
       - key: CORS_ORIGIN
-        value: https://retailos-web.onrender.com,https://retailos-admin.onrender.com,https://retailos-website.onrender.com,https://app.retailos.com,https://admin.retailos.com,https://www.retailos.com
+        value: https://retailos-web.onrender.com,https://retailos-admin.onrender.com,https://retailos-website.onrender.com,https://app.retailos.com,https://admin.retailos.com,https://www.retailos.com,https://retailos-web-v3lw.onrender.com,https://retailos-admin-v3lw.onrender.com,https://retailos-website-v3lw.onrender.com
       - key: WEBAPP_BASE_URL
         value: https://retailos-web.onrender.com  # Web app URL (for email links)
       - key: ADMIN_BASE_URL
