@@ -49,13 +49,19 @@ export function createApp() {
   app.use(
     cors({
       origin(origin, cb) {
-        if (!origin || config.cors.origins.includes(origin)) {
-          cb(null, true);
-        } else {
-          cb(null, false); // silently reject unknown origins
-        }
+        // Allow requests with no Origin header (same-origin, curl, Postman)
+        if (!origin) return cb(null, true);
+        // Allow any origin in the explicit allowlist
+        if (config.cors.origins.includes(origin)) return cb(null, true);
+        // Allow any *.onrender.com subdomain (Render assigns random URLs like
+        // retailos-web-v3lw.onrender.com — we can't predict the suffix)
+        if (origin.endsWith('.onrender.com')) return cb(null, true);
+        // Allow localhost for dev
+        if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) return cb(null, true);
+        // Reject everything else
+        cb(null, false);
       },
-      credentials: config.cors.credentials,
+      credentials: true,
     }),
   );
   app.use(morgan(config.isDev ? 'dev' : 'combined'));
