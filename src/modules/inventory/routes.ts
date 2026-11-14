@@ -819,7 +819,6 @@ inventoryRouter.get(
             status: true,
           },
         },
-        branch: { select: { id: true, name: true } },
       },
       orderBy: { updatedAt: 'desc' },
     };
