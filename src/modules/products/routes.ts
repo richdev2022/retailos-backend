@@ -422,7 +422,7 @@ function serializeProduct(p: any) {
     costPriceMinor: p.costPriceMinor?.toString() ?? '0',
     sellingPriceMinor: p.sellingPriceMinor?.toString() ?? '0',
     wholesalePriceMinor: p.wholesalePriceMinor != null ? p.wholesalePriceMinor.toString() : null,
-    inventoryBalances: (p.inventoryBalances ?? []).map((b: any) => ({
+    balances: (p.balances ?? []).map((b: any) => ({
       ...b,
       wacCostMinor: b.wacCostMinor?.toString() ?? '0',
     })),
@@ -434,8 +434,8 @@ const productInclude = {
   category: { select: { id: true, name: true } },
   unit: { select: { id: true, name: true, shortName: true } },
   barcodes: { select: { id: true, barcode: true, format: true } },
-  inventoryBalances: { select: { branchId: true, quantity: true, wacCostMinor: true } },
-  _count: { select: { movements: true } },
+  balances: { select: { branchId: true, quantity: true, wacCostMinor: true } },
+
 };
 
 // =====================================================
